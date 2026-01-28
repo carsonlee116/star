@@ -1,1 +1,183 @@
-https://gemini.google.com/share/b9137940abd6
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>鋼鐵人 HUD 終極導航版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; background-color: #000; overflow: hidden; font-family: 'Share Tech Mono', monospace; }
+        #video-hidden { display: none; }
+        canvas { display: block; position: absolute; top: 0; left: 0; }
+        .hud-border { border-left: 3px solid #06b6d4; background: rgba(0, 0, 0, 0.7); backdrop-filter: blur(5px); }
+    </style>
+</head>
+<body>
+    <video id="video-hidden" playsinline></video>
+    <canvas id="main-canvas"></canvas>
+
+    <!-- 頂部資訊列 -->
+    <div class="absolute top-6 left-6 p-4 hud-border text-cyan-400 z-10">
+        <div class="text-[10px] tracking-widest opacity-70">STARK_SYSTEM_V6.4_CLEAN_VIEW</div>
+        <div class="text-xl font-black italic text-white uppercase mt-1">Astro_Corrected</div>
+        <div class="mt-4 space-y-1 text-[11px] border-t border-cyan-900 pt-2">
+            <div class="flex justify-between w-40"><span>ZOOM:</span> <span id="ui-zoom" class="text-white">1.0</span></div>
+            <div class="flex justify-between w-40"><span>ALIGN:</span> <span class="text-white">RELATIVE_REF</span></div>
+        </div>
+    </div>
+
+    <script>
+        const videoElement = document.getElementById('video-hidden');
+        const canvas = document.getElementById('main-canvas');
+        const ctx = canvas.getContext('2d');
+        const uiZoom = document.getElementById('ui-zoom');
+
+        let width, height;
+        let zoom = 1.0;
+        let rotation = 0;
+        let offset = { x: 0, y: 0 };
+        let lastHandPos = null;
+
+        // 星座數據
+        const constellations = [
+            { name: "小熊座 (Ursa Minor)", color: "#ffffff", points: [{x:0,y:-800,label:"勾陳一 (北極星)"},{x:-50,y:-750},{x:-100,y:-700},{x:-80,y:-620},{x:0,y:-600,label:"北極二"},{x:70,y:-650,label:"北極一"},{x:0,y:-800}] },
+            { name: "大熊座 (Ursa Major)", color: "#00fbff", points: [{x:-300,y:-500,label:"天樞"},{x:-150,y:-480,label:"天璇"},{x:-50,y:-380,label:"天璣"},{x:-100,y:-280,label:"天權"},{x:50,y:-200,label:"玉衡"},{x:150,y:-50,label:"開陽"},{x:100,y:50,label:"搖光"}] },
+            { name: "仙后座 (Cassiopeia)", color: "#ffcc33", points: [{x:400,y:-700,label:"王良四"},{x:450,y:-600,label:"閣道三"},{x:350,y:-530,label:"策"},{x:420,y:-430,label:"閣道二"},{x:320,y:-350,label:"王良一"}] },
+            { name: "獵戶座 (Orion)", color: "#ff3366", points: [{x:500,y:300,label:"參宿四"},{x:580,y:400},{x:620,y:600,label:"參宿二"},{x:550,y:800,label:"參宿六"},{x:450,y:750},{x:350,y:800,label:"參宿七"},{x:320,y:600,label:"參宿三"},{x:380,y:400},{x:500,y:300}] },
+            { name: "天蠍座 (Scorpius)", color: "#ff6600", points: [{x:-600,y:600,label:"房宿四"},{x:-700,y:750,label:"心宿二"},{x:-800,y:850,label:"尾宿五"},{x:-750,y:1000,label:"尾宿八"},{x:-600,y:1100,label:"尾宿九"}] },
+            { name: "天琴座 (Lyra)", color: "#cc33ff", points: [{x:800,y:-200,label:"織女一"},{x:850,y:-150},{x:950,y:-150},{x:980,y:-80},{x:900,y:-50},{x:800,y:-200}] },
+            { name: "雙子座 (Gemini)", color: "#99ffcc", points: [{x:200,y:200,label:"北河二"},{x:350,y:250,label:"北河三"},{x:300,y:450},{x:150,y:400},{x:200,y:200}] },
+            { name: "室女座 (Virgo)", color: "#ff99cc", points: [{x:-500,y:100,label:"角宿一"},{x:-350,y:250},{x:-200,y:200,label:"東次二"},{x:-300,y:550},{x:-500,y:450}] },
+            { name: "南十字座 (Crux)", color: "#ffffff", points: [{x:0,y:1200,label:"十字架二"},{x:-80,y:1350,label:"十字架三"},{x:0,y:1500,label:"十字架一"},{x:80,y:1350,label:"十字架四"},{x:0,y:1200}] }
+        ];
+
+        const stars = Array.from({ length: 1800 }, () => ({
+            x: Math.random() * 10000 - 5000,
+            y: Math.random() * 10000 - 5000,
+            z: Math.random() * 3 + 0.5,
+            size: Math.random() * 2,
+            color: ["#fff", "#eef", "#fef"][Math.floor(Math.random()*3)]
+        }));
+
+        function drawHandSkeletal(ctx, landmarks, color) {
+            ctx.save();
+            ctx.translate(width, 0); ctx.scale(-1, 1);
+            ctx.strokeStyle = color;
+            ctx.fillStyle = color;
+            ctx.lineWidth = 2;
+            ctx.globalAlpha = 0.5;
+            const connections = [[0,1,2,3,4],[0,5,6,7,8],[9,10,11,12],[13,14,15,16],[0,17,18,19,20],[5,9,13,17]];
+            connections.forEach(path => {
+                ctx.beginPath();
+                path.forEach((idx, i) => {
+                    const lm = landmarks[idx];
+                    if (i === 0) ctx.moveTo(lm.x * width, lm.y * height);
+                    else ctx.lineTo(lm.x * width, lm.y * height);
+                });
+                ctx.stroke();
+            });
+            landmarks.forEach(lm => {
+                ctx.beginPath(); ctx.arc(lm.x * width, lm.y * height, 3, 0, Math.PI * 2); ctx.fill();
+            });
+            ctx.restore();
+        }
+
+        function onResults(results) {
+            ctx.clearRect(0, 0, width, height);
+            ctx.save();
+            ctx.translate(width, 0); ctx.scale(-1, 1);
+            ctx.globalAlpha = 0.2;
+            ctx.drawImage(results.image, 0, 0, width, height);
+            ctx.restore();
+
+            if (results.multiHandLandmarks) {
+                results.multiHandLandmarks.forEach((lm, i) => {
+                    const label = results.multiHandedness[i].label;
+                    const isLeft = label === 'Left';
+                    const handColor = isLeft ? '#06b6d4' : '#ec4899';
+                    drawHandSkeletal(ctx, lm, handColor);
+                    if (isLeft) {
+                        const d = Math.hypot(lm[4].x-lm[8].x, lm[4].y-lm[8].y);
+                        if (d < 0.05) {
+                            if (lastHandPos) {
+                                const dx = -(lm[8].x - lastHandPos.x) * width;
+                                const dy = (lm[8].y - lastHandPos.y) * height;
+                                const cosR = Math.cos(-rotation), sinR = Math.sin(-rotation);
+                                offset.x += (dx * cosR - dy * sinR) / zoom;
+                                offset.y += (dx * sinR + dy * cosR) / zoom;
+                            }
+                            lastHandPos = { x: lm[8].x, y: lm[8].y };
+                        } else {
+                            lastHandPos = null;
+                            rotation = rotation * 0.9 + Math.atan2(lm[8].y-lm[4].y, lm[4].x-lm[8].x) * 0.1;
+                        }
+                    } else {
+                        const d = Math.hypot(lm[4].x-lm[20].x, lm[4].y-lm[20].y);
+                        zoom = zoom * 0.8 + (0.1 + d * 4) * 0.2;
+                    }
+                });
+            }
+
+            uiZoom.innerText = zoom.toFixed(1);
+            ctx.save();
+            ctx.translate(width/2, height/2);
+            ctx.rotate(rotation);
+            ctx.scale(zoom, zoom);
+
+            stars.forEach(s => {
+                ctx.fillStyle = s.color;
+                ctx.globalAlpha = 0.15 + (s.z / 4);
+                ctx.beginPath();
+                ctx.arc(s.x + offset.x * (s.z * 0.15), s.y + offset.y * (s.z * 0.15), s.size, 0, 7);
+                ctx.fill();
+            });
+
+            ctx.translate(offset.x, offset.y);
+            constellations.forEach(con => {
+                ctx.strokeStyle = con.color;
+                ctx.lineWidth = 2 / zoom;
+                ctx.shadowBlur = 8; ctx.shadowColor = con.color;
+                ctx.beginPath();
+                con.points.forEach((p, idx) => {
+                    if(idx===0) ctx.moveTo(p.x, p.y); else ctx.lineTo(p.x, p.y);
+                });
+                ctx.stroke();
+                con.points.forEach(p => {
+                    ctx.fillStyle = "#fff";
+                    ctx.beginPath(); ctx.arc(p.x, p.y, 3/zoom, 0, 7); ctx.fill();
+                    if (p.label) {
+                        ctx.save();
+                        ctx.translate(p.x, p.y); ctx.rotate(-rotation);
+                        ctx.font = `${10/zoom}px Share Tech Mono`;
+                        ctx.fillText(p.label, 5/zoom, 0);
+                        ctx.restore();
+                    }
+                });
+                ctx.save();
+                ctx.translate(con.points[0].x, con.points[0].y - 30/zoom);
+                ctx.rotate(-rotation);
+                ctx.fillStyle = con.color;
+                ctx.font = `bold ${18/zoom}px Share Tech Mono`;
+                ctx.textAlign = "center";
+                ctx.fillText(con.name, 0, 0);
+                ctx.restore();
+            });
+            ctx.restore();
+        }
+
+        function resize() {
+            width = window.innerWidth; height = window.innerHeight;
+            canvas.width = width; canvas.height = height;
+        }
+        window.addEventListener('resize', resize); resize();
+        const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+        hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
+        hands.onResults(onResults);
+        const camera = new Camera(videoElement, { onFrame: async () => { await hands.send({image: videoElement}); }, width: 1280, height: 720 });
+        camera.start();
+    </script>
+</body>
+</html>
